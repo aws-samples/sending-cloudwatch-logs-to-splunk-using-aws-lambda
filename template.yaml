@@ -1,0 +1,160 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  splunk-aws-lambda-cloudwatchlogs-processor
+  Serverless Application for processing CloudWatch Logs to ingest into Splunk over HEC URL
+Globals:
+  Function:
+    Timeout: 180
+
+
+Parameters:
+  SplunkHttpEventCollectorURL:
+    Type: String
+    Description: "URL address of your Splunk HTTP event collector endpoint"
+
+  SplunkHttpEventCollectorToken:
+    Type: String
+    Description: "Token of your Splunk HTTP event collector endpoint"
+
+  SplunkAcknowledgementRequired:
+    Type:  String
+    Description: "True or False for Acknowledgement check required"
+    Default: "false"
+
+  SplunkAcknowledgementRetries:
+    Type: Number
+    Description: "Number of retries to check acknowledgement"
+    Default: 5
+
+  SplunkAcknowledgementWaitSeconds:
+    Type: Number
+    Description: "Number of seconds to wait for acknowledgement"
+    Default: 3    
+
+  DebugData:
+    Type: String
+    Description : "True or False to display debug data in Lambda execution output. Useful for debuging acknowledgement issues."
+    Default: "false"
+
+  ELBCookieName:
+    Type: String
+    Description : "Cookie name for Loadbalancer. AWSELB for AWS Classic ELB or AWSALB for AWS Application ELB"    
+
+  SplunkHttpEventCollectorType:
+    Type: String
+    Description : "HEC Endpoint Type for raw or event endpoints"  
+    Default: "raw"
+
+  HTTPRequestTimeout:
+    Type: Number
+    Description : "Seconds as timeout parameter for HTTP requests to HEC endpoint"  
+    Default: 5
+
+  SplunkSourceType:
+    Type: "String"
+    Description : "Splunk source types. Examples: aws:cloudtrail, aws:cloudwatchlogs:vpcflow etc."
+
+  HTTPVerifySSL:
+    Type: "String"
+    Description : "True or False for verify ssl parameter for HTTP requests."
+    Default: "true"    
+
+Resources:
+  SplunkLambdaKMSKey:
+    Type: 'AWS::KMS::Key'
+    Properties:
+      Description: Customer Managed KMS Key to secure Lambda Environment Variables
+      EnableKeyRotation: true
+      PendingWindowInDays: 20
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: key-default-1
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt SplunkLambdaCloudWatchLogsRole.Arn
+            Action:
+              - 'kms:Create*'
+              - 'kms:Describe*'
+              - 'kms:Enable*'
+              - 'kms:List*'
+              - 'kms:Put*'
+              - 'kms:Update*'
+              - 'kms:Revoke*'
+              - 'kms:Disable*'
+              - 'kms:Get*'
+              - 'kms:Delete*'
+              - 'kms:ScheduleKeyDeletion'
+              - 'kms:CancelKeyDeletion'
+            Resource: '*'
+
+  SplunkLambdaCloudWatchLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+        - PolicyName: lambda-cloudwatch
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+            - Effect: Allow
+              Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              Resource: arn:aws:logs:*:*:*                
+
+  SplunkLambdaCloudWatchLogsProcessor:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: SplunkLambdaCloudWatchLogsProcessor
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Architectures:
+      - x86_64
+      Timeout: 180
+      MemorySize: 128
+      KmsKeyArn: !GetAtt SplunkLambdaKMSKey.Arn
+      Role: !GetAtt 'SplunkLambdaCloudWatchLogsRole.Arn'
+      Environment:
+        Variables:
+          ACK_REQUIRED: !Ref SplunkAcknowledgementRequired
+          ACK_RETRIES: !Ref SplunkAcknowledgementRetries
+          ACK_WAIT_SECS: !Ref SplunkAcknowledgementWaitSeconds
+          DEBUG_DATA: !Ref DebugData
+          ELB_COOKIE_NAME: !Ref ELBCookieName
+          HEC_ENDPOINT_TYPE: !Ref SplunkHttpEventCollectorType
+          HEC_HOST: !Ref SplunkHttpEventCollectorURL
+          HEC_TOKEN: !Ref SplunkHttpEventCollectorToken
+          REQUEST_TIMEOUT: !Ref HTTPRequestTimeout
+          SOURCE_TYPE: !Ref SplunkSourceType
+          VERIFY_SSL: !Ref HTTPVerifySSL
+Outputs:
+  SplunkLambdaCloudWatchLogsProcessor:
+    Description: Splunk CloudWatch Logs function ARN
+    Value:
+      Fn::GetAtt:
+      - SplunkLambdaCloudWatchLogsProcessor
+      - Arn
+  SplunkLambdaCloudWatchLogsProcessorRole:
+    Description: Implicit IAM Role created for CloudWatch Logs function
+    Value:
+      Fn::GetAtt:
+      - SplunkLambdaCloudWatchLogsProcessor
+      - Arn
